@@ -143,6 +143,7 @@ Most of the sync time is Gmail fetching: the workflow fetches at most 10 message
 - **HMAC signature (bonus).** Implemented and tested in the backend (`WEBHOOK_HMAC_SECRET`), but not wired in the n8n workflows: it would need a Code node to sign the exact body.
 - **Auto-reply for one category (bonus).** Not implemented, on purpose: sending without validation is the riskiest feature and was out of the time budget.
 - **Classification trigger.** Workflow 2 runs every 5 minutes; triggering it at the end of each sync would reduce the delay.
+- **Priority of probable spam.** On the real inbox, the AI sometimes gives priority 1 to phishing-like emails (e.g. a "domain expires" notice classified as `spam`, P1): it reads the email's false urgency as real. The top 5 already ranks spam after other emails of the same priority, but a simple rule (`spam` or `newsletter` → priority 3) would make this consistent.
 - **First sync** fetches the last 30 days only.
 
 ### Bonus status
