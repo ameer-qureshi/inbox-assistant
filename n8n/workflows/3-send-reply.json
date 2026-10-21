@@ -51,15 +51,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ attempt: $('Reply requested by backend').first().json.body.attempt }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ attempt: $('Reply requested by backend').first().json.body.attempt }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "05822412-276b-4263-95bf-b1f356d08bb0",
       "name": "Claim this attempt",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        220,
+        440,
         0
       ],
       "credentials": {
@@ -102,7 +113,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        440,
+        660,
         0
       ]
     },
@@ -115,7 +126,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        660,
+        880,
         -100
       ]
     },
@@ -137,7 +148,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        880,
+        1100,
         -100
       ],
       "credentials": {
@@ -158,15 +169,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: 'sent', attempt: $('Reply requested by backend').first().json.body.attempt, gmail_message_id: $json.id }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ status: 'sent', attempt: $('Reply requested by backend').first().json.body.attempt, gmail_message_id: $json.id }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "545d554c-175f-46e6-af5a-9cc962d6398e",
       "name": "Report sent",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
+        1760,
         -200
       ],
       "credentials": {
@@ -189,15 +211,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: 'failed', attempt: $('Reply requested by backend').first().json.body.attempt, error: String($json.error?.message ?? 'Gmail refused the message').slice(0, 500) }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ status: 'failed', attempt: $('Reply requested by backend').first().json.body.attempt, error: String($json.error?.message ?? 'Gmail refused the message').slice(0, 500) }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "cf26d927-46f1-4a92-8d33-c63b7d15a6a2",
       "name": "Report failed",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
+        1760,
         0
       ],
       "credentials": {
@@ -217,8 +250,62 @@
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
       "position": [
-        660,
+        880,
         120
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ attempt: $('Reply requested by backend').first().json.body.attempt }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "fcfed7d4-387d-4bef-aa77-0b8d1de2d91b",
+      "name": "Sign: Claim this attempt",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ status: 'sent', attempt: $('Reply requested by backend').first().json.body.attempt, gmail_message_id: $json.id }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "47e89289-2ff9-4e63-aadb-92f260286bd5",
+      "name": "Sign: Report sent",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ status: 'failed', attempt: $('Reply requested by backend').first().json.body.attempt, error: String($json.error?.message ?? 'Gmail refused the message').slice(0, 500) }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "cbf7bd4b-c9b5-4412-bb2c-4c39ee8334ff",
+      "name": "Sign: Report failed",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
       ]
     }
   ],
@@ -227,7 +314,7 @@
       "main": [
         [
           {
-            "node": "Claim this attempt",
+            "node": "Sign: Claim this attempt",
             "type": "main",
             "index": 0
           }
@@ -278,11 +365,44 @@
       "main": [
         [
           {
-            "node": "Report sent",
+            "node": "Sign: Report sent",
             "type": "main",
             "index": 0
           }
         ],
+        [
+          {
+            "node": "Sign: Report failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Claim this attempt": {
+      "main": [
+        [
+          {
+            "node": "Claim this attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Report sent": {
+      "main": [
+        [
+          {
+            "node": "Report sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Report failed": {
+      "main": [
         [
           {
             "node": "Report failed",

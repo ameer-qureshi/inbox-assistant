@@ -45,6 +45,20 @@
         "genericAuthType": "httpHeaderAuth",
         "options": {
           "timeout": 20000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
         }
       },
       "id": "33e72933-6d33-4b57-8376-a89b387fa61b",
@@ -52,7 +66,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        220,
+        440,
         0
       ],
       "credentials": {
@@ -109,7 +123,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        440,
+        660,
         0
       ],
       "credentials": {
@@ -131,7 +145,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        660,
+        880,
         0
       ]
     },
@@ -164,7 +178,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        880,
+        1100,
         0
       ]
     },
@@ -196,7 +210,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
+        1540,
         -100
       ],
       "credentials": {
@@ -219,7 +233,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1320,
+        1760,
         -100
       ]
     },
@@ -233,15 +247,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ sync_run_id: $json.sync_run_id, emails: $json.emails }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "489da057-c2fc-40d4-8494-c25dcbb053cb",
       "name": "Send batch to backend",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1540,
+        2200,
         -100
       ],
       "credentials": {
@@ -264,15 +289,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: 'success', fetched_count: $('Collect message ids').first().json.count }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ status: 'success', fetched_count: $('Collect message ids').first().json.count }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "6eb999a5-d6be-470c-a0b7-1c666723012c",
       "name": "Complete sync run",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1760,
+        2640,
         -100
       ],
       "credentials": {
@@ -296,15 +332,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"success\", fetched_count: 0 }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ status: \"success\", fetched_count: 0 }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "4273ee31-bf89-472f-8631-a10835116d8f",
       "name": "Complete sync run (nothing new)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
+        1540,
         120
       ],
       "credentials": {
@@ -316,6 +363,78 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "{}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "00417f2a-2267-4716-9aac-c6091445d10e",
+      "name": "Sign: Start sync run",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ sync_run_id: $json.sync_run_id, emails: $json.emails }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "cced7493-e7b3-4dc1-b26a-4eea7fe6b01f",
+      "name": "Sign: Send batch to backend",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ status: 'success', fetched_count: $('Collect message ids').first().json.count }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "8fc1967c-8c22-4d2c-9830-c08f0ab87827",
+      "name": "Sign: Complete sync run",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ status: \"success\", fetched_count: 0 }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "f049a2b4-5dd7-4336-a475-5641522f8583",
+      "name": "Sign: Complete sync run (nothing new)",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        120
+      ]
     }
   ],
   "connections": {
@@ -323,7 +442,7 @@
       "main": [
         [
           {
-            "node": "Start sync run",
+            "node": "Sign: Start sync run",
             "type": "main",
             "index": 0
           }
@@ -374,7 +493,7 @@
         ],
         [
           {
-            "node": "Complete sync run (nothing new)",
+            "node": "Sign: Complete sync run (nothing new)",
             "type": "main",
             "index": 0
           }
@@ -396,7 +515,7 @@
       "main": [
         [
           {
-            "node": "Send batch to backend",
+            "node": "Sign: Send batch to backend",
             "type": "main",
             "index": 0
           }
@@ -407,7 +526,51 @@
       "main": [
         [
           {
+            "node": "Sign: Complete sync run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Start sync run": {
+      "main": [
+        [
+          {
+            "node": "Start sync run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Send batch to backend": {
+      "main": [
+        [
+          {
+            "node": "Send batch to backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Complete sync run": {
+      "main": [
+        [
+          {
             "node": "Complete sync run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Complete sync run (nothing new)": {
+      "main": [
+        [
+          {
+            "node": "Complete sync run (nothing new)",
             "type": "main",
             "index": 0
           }

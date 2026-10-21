@@ -38,15 +38,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ workflow: $json.workflow?.name ?? 'unknown', node: $json.execution?.lastNodeExecuted ?? $json.trigger?.error?.node?.name ?? null, message: String($json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'Unknown error').slice(0, 4000), execution_id: $json.execution?.id ? String($json.execution.id) : null }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ workflow: $json.workflow?.name ?? 'unknown', node: $json.execution?.lastNodeExecuted ?? $json.trigger?.error?.node?.name ?? null, message: String($json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'Unknown error').slice(0, 4000), execution_id: $json.execution?.id ? String($json.execution.id) : null }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "30d1c6e3-1db3-4f06-a5bb-0058bb8ead75",
       "name": "Record error in backend",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        240,
+        460,
         0
       ],
       "credentials": {
@@ -58,10 +69,39 @@
       "maxTries": 5,
       "retryOnFail": true,
       "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ workflow: $json.workflow?.name ?? 'unknown', node: $json.execution?.lastNodeExecuted ?? $json.trigger?.error?.node?.name ?? null, message: String($json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'Unknown error').slice(0, 4000), execution_id: $json.execution?.id ? String($json.execution.id) : null }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "54c417ad-24e9-489f-97d6-ebecbbcde0d8",
+      "name": "Sign: Record error in backend",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ]
     }
   ],
   "connections": {
     "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Sign: Record error in backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Record error in backend": {
       "main": [
         [
           {

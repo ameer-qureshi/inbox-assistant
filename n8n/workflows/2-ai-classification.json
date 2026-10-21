@@ -155,15 +155,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 1 }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 1 }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "290c6887-3ac0-4d92-a912-c03d46abed65",
       "name": "Validate (attempt 1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
+        1320,
         100
       ],
       "credentials": {
@@ -206,7 +217,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1320,
+        1540,
         100
       ]
     },
@@ -228,7 +239,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1540,
+        1760,
         0
       ],
       "credentials": {
@@ -252,15 +263,26 @@
           "timeout": 20000
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 2 }) }}"
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 2 }) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Signature",
+              "value": "=sha256={{ $json._signature }}"
+            }
+          ]
+        }
       },
       "id": "750c52af-61f5-4eb1-bdb3-b469691f7535",
       "name": "Validate (attempt 2)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1760,
+        2200,
         0
       ],
       "credentials": {
@@ -283,10 +305,46 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1980,
+        2420,
         200
       ],
       "webhookId": "5441a343-b806-406f-bb9b-50adf9f99420"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 1 }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "9b343996-d1f2-4826-b185-bfc5326aebca",
+      "name": "Sign: Validate (attempt 1)",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 2 }) }}",
+        "dataPropertyName": "_signature",
+        "secret": "={{ $env.WEBHOOK_HMAC_SECRET || 'hmac-disabled' }}",
+        "encoding": "hex"
+      },
+      "id": "04a5a1e2-ca1e-4c7f-87db-bbfe5c1a7bfc",
+      "name": "Sign: Validate (attempt 2)",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        0
+      ]
     }
   ],
   "connections": {
@@ -339,7 +397,7 @@
       "main": [
         [
           {
-            "node": "Validate (attempt 1)",
+            "node": "Sign: Validate (attempt 1)",
             "type": "main",
             "index": 0
           }
@@ -386,7 +444,7 @@
       "main": [
         [
           {
-            "node": "Validate (attempt 2)",
+            "node": "Sign: Validate (attempt 2)",
             "type": "main",
             "index": 0
           }
@@ -416,6 +474,28 @@
         [
           {
             "node": "Loop over emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Validate (attempt 1)": {
+      "main": [
+        [
+          {
+            "node": "Validate (attempt 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign: Validate (attempt 2)": {
+      "main": [
+        [
+          {
+            "node": "Validate (attempt 2)",
             "type": "main",
             "index": 0
           }

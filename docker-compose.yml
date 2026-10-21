@@ -64,6 +64,7 @@ services:
       N8N_RUNNERS_ENABLED: "true"
       N8N_DIAGNOSTICS_ENABLED: "false"
       BACKEND_URL: http://backend:8000
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:-} # workflows sign their calls to the backend
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/workflows:ro      # for "n8n import:workflow"

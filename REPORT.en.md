@@ -165,6 +165,7 @@ erDiagram
 | **Rule-based top 5, AI-written summary** | The ranking (priority, then "to verify", then age) is predictable and explainable: each item shows its reason. The AI writes only the free-text summary, cached per day. |
 | **Two models** | `openai/gpt-oss-20b` for classification (many calls, simple task, `temperature 0`, JSON mode, short reasoning). `openai/gpt-oss-120b` for drafts (few calls, writing quality matters). Both are configurable in `.env`. |
 | **Session cookie** (httpOnly, SameSite=Lax) + Argon2id | The token is not readable by JavaScript (XSS), and only a SHA-256 of it is stored in the database. Passwords use Argon2id, the current OWASP recommendation. |
+| **HMAC signature on top of the shared secret** (bonus) | The shared secret proves who calls; the HMAC also proves the body was not changed on the way. In n8n, a Crypto node signs the exact text that the next HTTP node sends as a raw body; the key comes from `$env.WEBHOOK_HMAC_SECRET`, so the workflow exports contain no key. |
 | **Same origin** (nginx serves the site and proxies `/api`) | No CORS configuration, and the cookie works simply. |
 | **FastAPI** | Typed request and response models (Pydantic) and automatic Swagger documentation at `/api/docs`. |
 | **n8n pinned to 1.123.62** | The last maintained 1.x line. 2.x changes defaults (for example environment access in nodes) that these workflows rely on. |
@@ -182,6 +183,8 @@ erDiagram
 | No credentials in the workflow exports | Workflows only reference credential ids. `n8n/setup_n8n.py` reads `.env` and imports the credentials into n8n, which encrypts them. |
 | Header injection in the outgoing email | Line breaks are removed from every header value before building the MIME message. |
 | Wrong sync counters with real Gmail: a run reported 20 duplicates instead of 30 | n8n posts the batches of one run in parallel, and the backend did `count += n` in Python (read, then write), so one batch overwrote the other ("lost update"). The counters are now incremented atomically in SQL (`count = count + n`), and a test posts 8 batches in parallel on PostgreSQL. No email was ever lost, only the count. |
+| "The server cannot be reached" after the backend container was recreated | nginx resolves `backend` once at startup and kept the old container IP (HTTP 502). nginx now uses Docker's DNS (`resolver 127.0.0.11`) with a variable in `proxy_pass`, so the name is resolved again; checked by forcing the backend onto a new IP. |
+| Signing in n8n without leaking the key | A Crypto node (HMAC-SHA256) reads the key from the environment, and the HTTP node sends the body as raw text built by the same expression, so the signed bytes are exactly the sent bytes. |
 | Groq retired the Llama models first chosen (HTTP 404 `model_not_found`) | Switched to `gpt-oss-20b` / `gpt-oss-120b`. The model names live in `.env`, so no code depended on them. |
 | `gpt-oss` models "think" before answering, and that reasoning counts toward `max_tokens`: with 300 tokens, some answers were cut off before the JSON (Groq HTTP 400 `json_validate_failed`, 1 email in 28) | `reasoning_effort: low` for these models and a larger token budget (1000). Valid first try went from 96.4 % to 100 %. Because n8n forwards the request built by the backend unchanged, the fix applies to the workflow too. |
 
@@ -200,6 +203,7 @@ erDiagram
 | Valid AI outputs on the first try (real inbox, through n8n) | `first_try_valid` of the emails synced from Gmail (`GET /api/stats` gives this rate directly on an inbox without the demo data) | **100 %** (30/30 synced emails, 0 retry, 0 "To verify") |
 | Reply sent from the app (real Gmail) | send from the UI, check the status and the thread | status `sent` about 1 s after "Send now"; the reply appears in the same Gmail thread |
 | Error handling (simulated Gmail outage) | Gmail API made unreachable for n8n only, then restored | The scheduled sync failed after its 3 retries; workflow 4 recorded the error in the backend within 10 s (workflow, node, message, execution id) and the run was marked `failed`. The next run started from the same cursor as the failed one (the last successful run minus the overlap), so nothing was skipped |
+| HMAC check (live) | requests sent to the running backend | missing signature, wrong signature and a body changed after signing: all refused (HTTP 401); signed calls from n8n and from the seed script: accepted |
 | Automated tests | `pytest` | 63 on PostgreSQL 16; on SQLite 62 pass and 1 is skipped (the parallel-batches test needs real concurrent connections) |
 
 Most of the sync time is Gmail fetching: the workflow fetches at most 10 messages per second to respect the Gmail quota, so 30 emails need about 3 s of pure fetching; the rest is listing, the HTTP round trips between n8n and the backend, and n8n's own overhead. The backend import itself takes well under 0.1 s.
@@ -212,7 +216,6 @@ Most of the sync time is Gmail fetching: the workflow fetches at most 10 message
 - **Single user.** One account, created from `.env`. Multi-user would need an owner on threads and per-user Gmail credentials.
 - **Login rate limiting** is not implemented (add a limit per IP and per account).
 - **Live updates.** The list refreshes every 60 s and the reply status every 1.5 s while sending. Server-Sent Events would remove the polling (bonus not done).
-- **HMAC signature (bonus).** Implemented and tested in the backend (`WEBHOOK_HMAC_SECRET`), but not wired in the n8n workflows: it would need a Code node to sign the exact body.
 - **Auto-reply for one category (bonus).** Not implemented, on purpose: sending without validation is the riskiest feature and was out of the time budget.
 - **Classification trigger.** Workflow 2 runs every 5 minutes; triggering it at the end of each sync would reduce the delay.
 - **Priority of probable spam.** On the real inbox, the AI sometimes gives priority 1 to phishing-like emails (e.g. a "domain expires" notice classified as `spam`, P1): it reads the email's false urgency as real. The top 5 already ranks spam after other emails of the same priority, but a simple rule (`spam` or `newsletter` → priority 3) would make this consistent.
@@ -224,6 +227,6 @@ Most of the sync time is Gmail fetching: the workflow fetches at most 10 message
 | Bonus | Status |
 |---|---|
 | Real-time updates (SSE / WebSocket) | Not done (polling instead) |
-| HMAC signature of webhook bodies | Backend done and tested, not wired in n8n |
+| HMAC signature of webhook bodies | Done: every n8n call to the backend is signed (HMAC-SHA256 of the exact body, header `X-Signature`), and the backend rejects a missing, wrong or tampered signature |
 | Masking phone numbers and IBANs before the AI | Done and tested |
 | Auto-reply for one category | Not done |

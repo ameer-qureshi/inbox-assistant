@@ -166,6 +166,7 @@ erDiagram
 | **Top 5 par règles, résumé écrit par l'IA** | Le classement (priorité, puis « à vérifier », puis ancienneté) est prévisible et explicable : chaque élément affiche sa raison. L'IA écrit seulement le résumé en texte libre, mis en cache par jour. |
 | **Deux modèles** | `openai/gpt-oss-20b` pour la classification (beaucoup d'appels, tâche simple, `temperature 0`, mode JSON, raisonnement court). `openai/gpt-oss-120b` pour les brouillons (peu d'appels, la qualité d'écriture compte). Les deux sont configurables dans `.env`. |
 | **Cookie de session** (httpOnly, SameSite=Lax) + Argon2id | Le jeton n'est pas lisible par JavaScript (XSS), et seul son SHA-256 est stocké en base. Les mots de passe utilisent Argon2id, la recommandation actuelle de l'OWASP. |
+| **Signature HMAC en plus du secret partagé** (bonus) | Le secret partagé prouve qui appelle ; le HMAC prouve en plus que le corps n'a pas été modifié en chemin. Dans n8n, un nœud Crypto signe le texte exact que le nœud HTTP suivant envoie comme corps brut ; la clé vient de `$env.WEBHOOK_HMAC_SECRET`, donc les exports de workflows ne contiennent aucune clé. |
 | **Même origine** (nginx sert le site et relaie `/api`) | Pas de configuration CORS, et le cookie fonctionne simplement. |
 | **FastAPI** | Modèles de requête et de réponse typés (Pydantic) et documentation Swagger automatique sur `/api/docs`. |
 | **n8n figé en version 1.123.62** | La dernière branche 1.x maintenue. La 2.x change des valeurs par défaut (par exemple l'accès aux variables d'environnement dans les nœuds) dont ces workflows dépendent. |
@@ -183,6 +184,8 @@ erDiagram
 | Aucun identifiant dans les exports de workflows | Les workflows ne référencent que des identifiants de credentials. `n8n/setup_n8n.py` lit `.env` et importe les credentials dans n8n, qui les chiffre. |
 | Injection d'en-têtes dans l'e-mail sortant | Les retours à la ligne sont supprimés de chaque valeur d'en-tête avant de construire le message MIME. |
 | Compteurs de synchronisation faux avec le vrai Gmail : une exécution indiquait 20 doublons au lieu de 30 | n8n envoie les lots d'une même exécution en parallèle, et le backend faisait `count += n` en Python (lecture, puis écriture) : un lot écrasait le compte de l'autre (« mise à jour perdue »). Les compteurs sont désormais incrémentés de façon atomique en SQL (`count = count + n`), et un test envoie 8 lots en parallèle sur PostgreSQL. Aucun e-mail n'a jamais été perdu, seulement le compte. |
+| « Le serveur est injoignable » après la recréation du conteneur backend | nginx résout `backend` une seule fois au démarrage et gardait l'ancienne adresse IP du conteneur (HTTP 502). nginx utilise maintenant le DNS de Docker (`resolver 127.0.0.11`) avec une variable dans `proxy_pass`, donc le nom est résolu à nouveau ; vérifié en forçant le backend sur une nouvelle adresse IP. |
+| Signer dans n8n sans divulguer la clé | Un nœud Crypto (HMAC-SHA256) lit la clé dans l'environnement, et le nœud HTTP envoie le corps sous forme de texte brut construit par la même expression : les octets signés sont exactement les octets envoyés. |
 | Groq a retiré les modèles Llama choisis au départ (HTTP 404 `model_not_found`) | Passage à `gpt-oss-20b` / `gpt-oss-120b`. Les noms des modèles sont dans `.env` : aucun code n'en dépendait. |
 | Les modèles `gpt-oss` « réfléchissent » avant de répondre, et ce raisonnement compte dans `max_tokens` : avec 300 tokens, certaines réponses étaient coupées avant le JSON (HTTP 400 `json_validate_failed` de Groq, 1 e-mail sur 28) | `reasoning_effort: low` pour ces modèles et un budget plus large (1000 tokens). Le taux de réponses valides du premier coup est passé de 96,4 % à 100 %. Comme n8n transmet sans la modifier la requête construite par le backend, la correction s'applique aussi au workflow. |
 
@@ -201,6 +204,7 @@ erDiagram
 | Sorties IA valides du premier coup (vraie boîte, via n8n) | `first_try_valid` des e-mails synchronisés depuis Gmail (`GET /api/stats` donne directement ce taux sur une boîte sans les données de démonstration) | **100 %** (30/30 e-mails synchronisés, 0 nouvelle tentative, 0 « à vérifier ») |
 | Réponse envoyée depuis l'application (vrai Gmail) | envoi depuis l'interface, vérification du statut et du fil | statut `sent` environ 1 s après « Send now » ; la réponse apparaît dans le même fil Gmail |
 | Gestion des erreurs (panne Gmail simulée) | API Gmail rendue injoignable pour n8n seulement, puis rétablie | La synchronisation planifiée a échoué après ses 3 tentatives ; le workflow 4 a enregistré l'erreur auprès du backend en moins de 10 s (workflow, nœud, message, identifiant d'exécution) et l'exécution a été marquée `failed`. L'exécution suivante est repartie du même curseur que celle en échec (dernière exécution réussie moins le chevauchement) : rien n'a été sauté |
+| Vérification HMAC (en conditions réelles) | requêtes envoyées au backend en fonctionnement | signature absente, signature fausse et corps modifié après signature : tous refusés (HTTP 401) ; appels signés de n8n et du script de démonstration : acceptés |
 | Tests automatisés | `pytest` | 63 sur PostgreSQL 16 ; sur SQLite, 62 réussis et 1 ignoré (le test des lots en parallèle a besoin de vraies connexions concurrentes) |
 
 L'essentiel du temps de synchronisation vient de la récupération Gmail : le workflow récupère au plus 10 messages par seconde pour respecter le quota Gmail, donc 30 e-mails demandent environ 3 s de récupération pure ; le reste correspond au listage, aux allers-retours HTTP entre n8n et le backend, et au fonctionnement propre de n8n. L'import par le backend prend nettement moins de 0,1 s.
@@ -213,7 +217,6 @@ L'essentiel du temps de synchronisation vient de la récupération Gmail : le wo
 - **Un seul utilisateur.** Un compte, créé à partir de `.env`. Le multi-utilisateur demanderait un propriétaire sur les fils et des credentials Gmail par utilisateur.
 - **Limitation des tentatives de connexion** non implémentée (ajouter une limite par IP et par compte).
 - **Mises à jour en direct.** La liste se rafraîchit toutes les 60 s et le statut d'envoi toutes les 1,5 s pendant l'envoi. Les Server-Sent Events supprimeraient ces interrogations (bonus non réalisé).
-- **Signature HMAC (bonus).** Implémentée et testée dans le backend (`WEBHOOK_HMAC_SECRET`), mais pas branchée dans les workflows n8n : il faudrait un nœud Code pour signer le corps exact.
 - **Réponse automatique pour une catégorie (bonus).** Non implémentée, volontairement : envoyer sans validation est la fonctionnalité la plus risquée, et elle dépassait le temps disponible.
 - **Déclenchement de la classification.** Le workflow 2 tourne toutes les 5 minutes ; le déclencher à la fin de chaque synchronisation réduirait le délai.
 - **Priorité du spam probable.** Sur la vraie boîte, l'IA donne parfois la priorité 1 à des e-mails de type hameçonnage (par exemple un avis « votre domaine expire » classé `spam`, P1) : elle prend leur fausse urgence au sérieux. Le top 5 classe déjà le spam après les autres e-mails de même priorité, mais une règle simple (`spam` ou `newsletter` → priorité 3) rendrait cela cohérent.
@@ -225,6 +228,6 @@ L'essentiel du temps de synchronisation vient de la récupération Gmail : le wo
 | Bonus | État |
 |---|---|
 | Mises à jour en temps réel (SSE / WebSocket) | Non réalisé (interrogation périodique à la place) |
-| Signature HMAC du corps des webhooks | Backend réalisé et testé, pas branché dans n8n |
+| Signature HMAC du corps des webhooks | Réalisé : chaque appel de n8n au backend est signé (HMAC-SHA256 du corps exact, en-tête `X-Signature`), et le backend refuse une signature absente, fausse ou un corps modifié |
 | Masquage des numéros de téléphone et des IBAN avant l'IA | Réalisé et testé |
 | Réponse automatique pour une catégorie | Non réalisé |
