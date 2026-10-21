@@ -1,0 +1,73 @@
+# Starts the whole stack: database, backend, website and n8n.
+#   cp .env.example .env   (then fill in the secrets)
+#   docker compose up -d --build
+# Site: http://localhost:8080   API docs: http://localhost:8080/api/docs   n8n: http://localhost:5678
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-inbox}
+      POSTGRES_USER: ${POSTGRES_USER:-inbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inbox} -d ${POSTGRES_DB:-inbox}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-inbox}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-inbox}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:-}
+      N8N_SEND_WEBHOOK_URL: ${N8N_SEND_WEBHOOK_URL:-}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-}
+      MOCK_SEND_FAILURE_RATE: ${MOCK_SEND_FAILURE_RATE:-0}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      CLASSIFY_MODEL: ${CLASSIFY_MODEL:-openai/gpt-oss-20b}
+      DRAFT_MODEL: ${DRAFT_MODEL:-openai/gpt-oss-120b}
+      BACKEND_URL: http://localhost:8000   # used by scripts run inside the container
+    # Not published: only the website (nginx) and n8n reach it, on the Docker network
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-1.123.62}
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY in .env}
+      GENERIC_TIMEZONE: Europe/Paris
+      TZ: Europe/Paris
+      N8N_SECURE_COOKIE: "false"           # local http only
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false" # workflows read BACKEND_URL below
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      BACKEND_URL: http://backend:8000
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro      # for "n8n import:workflow"
+
+volumes:
+  db_data:
+  n8n_data:
