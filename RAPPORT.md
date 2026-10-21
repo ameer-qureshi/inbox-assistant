@@ -1,60 +1,62 @@
-# Report: Inbox Assistant (Web, API and n8n automation)
+# Rapport : Inbox Assistant (Web, API et automatisation n8n)
 
-## 1. Installation from an empty repository
+🇫🇷 **Français** | 🇬🇧 [English version](REPORT.en.md)
 
-See [README.md](README.md) for the full steps. In short:
+## 1. Installation depuis un dépôt vierge
+
+Les étapes complètes sont dans le [README.md](README.md). En résumé :
 
 ```bash
 git clone <repo> && cd inbox-assistant
-cp .env.example .env                       # fill in the secrets
+cp .env.example .env                       # renseigner les secrets
 docker compose up -d --build               # db + backend + web + n8n
-docker compose exec backend python -m scripts.seed --classify   # 30 demo emails
+docker compose exec backend python -m scripts.seed --classify   # 30 e-mails de démonstration
 # http://localhost:8080
 ```
 
-Then, to go live: Groq key, Gmail OAuth client, `python n8n/setup_n8n.py`, sign in to Google in n8n, activate the workflows (README, "Going live").
+Ensuite, pour brancher les vrais services : clé Groq, client OAuth Gmail, `python n8n/setup_n8n.py`, connexion Google dans n8n, activation des workflows (README, section « Going live »).
 
 ## 2. Architecture
 
 ```mermaid
 flowchart LR
-    U[Browser] -->|"HTTPS, session cookie"| W["nginx: website + /api proxy"]
+    U[Navigateur] -->|"HTTPS, cookie de session"| W["nginx : site + proxy /api"]
     W -->|"/api/*"| B[Backend FastAPI]
     B --> DB[(PostgreSQL)]
-    B -->|"AI drafts, day summary"| G[Groq API]
+    B -->|"brouillons IA, résumé du jour"| G[API Groq]
     N[n8n] -->|"/api/webhooks/* + X-Webhook-Secret"| B
-    B -->|"send-reply webhook + secret"| N
-    N -->|"OAuth2"| GM[Gmail API]
+    B -->|"webhook d'envoi + secret"| N
+    N -->|"OAuth2"| GM[API Gmail]
     N -->|"classification"| G
 ```
 
-Rules:
-- **The website never calls n8n.** It only calls `/api/*` on its own origin. nginx blocks `/api/webhooks/*` from the outside: only n8n reaches those routes, on the internal Docker network.
-- **n8n never writes to the database.** It calls the backend, which validates everything.
-- **Each direction has its own secret:** `WEBHOOK_SECRET` (n8n to backend) and `N8N_WEBHOOK_SECRET` (backend to n8n).
+Règles :
+- **Le site n'appelle jamais n8n.** Il appelle uniquement `/api/*` sur sa propre origine. nginx bloque `/api/webhooks/*` depuis l'extérieur : seul n8n atteint ces routes, via le réseau Docker interne.
+- **n8n n'écrit jamais dans la base.** Il appelle le backend, qui valide tout.
+- **Chaque sens a son propre secret :** `WEBHOOK_SECRET` (n8n vers backend) et `N8N_WEBHOOK_SECRET` (backend vers n8n).
 
-### The four workflows
+### Les quatre workflows
 
-| Workflow | Trigger | What it does |
+| Workflow | Déclencheur | Rôle |
 |---|---|---|
-| 1. Gmail sync | Every 10 min | Gets the cursor from the backend, lists Gmail with `after:<cursor>` (all pages), fetches each message (10 per second), parses it, posts batches of 20, closes the sync run |
-| 2. AI classification | Every 5 min | Gets pending emails with a ready-made prompt, calls Groq, posts the raw answer for validation, retries once if invalid, pauses 3 s between emails |
-| 3. Send reply | Webhook, called by the backend | Claims the attempt, builds the MIME message (same Gmail thread), sends it, reports `sent` or `failed` |
-| 4. Error handler | Error Trigger | Records any crash in the backend; a crashed sync run is marked failed |
+| 1. Synchronisation Gmail | Toutes les 10 min | Récupère le curseur auprès du backend, liste Gmail avec `after:<curseur>` (toutes les pages), récupère chaque message (10 par seconde), l'analyse, envoie des lots de 20, clôt l'exécution de synchronisation |
+| 2. Classification IA | Toutes les 5 min | Récupère les e-mails en attente avec un prompt prêt à l'emploi, appelle Groq, renvoie la réponse brute pour validation, réessaie une fois si elle est invalide, pause de 3 s entre deux e-mails |
+| 3. Envoi des réponses | Webhook appelé par le backend | Réserve (« claim ») la tentative, construit le message MIME (même fil Gmail), l'envoie, renvoie `sent` ou `failed` |
+| 4. Gestion des erreurs | Error Trigger | Enregistre tout plantage auprès du backend ; une synchronisation plantée est marquée en échec |
 
-### Main flows
+### Flux principaux
 
-**Sync.** The cursor is the *start* time of the last *successful* run, minus a 5-minute overlap. Emails that arrive during a run, or a small clock difference, are therefore fetched again next time, and the duplicates are dropped by the unique Gmail id. A failed or crashed run never moves the cursor, so nothing is lost. The first sync ever only fetches the last 30 days.
+**Synchronisation.** Le curseur est l'heure de *début* de la dernière exécution *réussie*, moins un chevauchement de 5 minutes. Les e-mails arrivés pendant une exécution, ou un léger décalage d'horloge, sont donc récupérés à nouveau la fois suivante, et les doublons sont écartés grâce à l'identifiant Gmail unique. Une exécution échouée ou plantée ne fait jamais avancer le curseur : rien n'est perdu. La toute première synchronisation ne récupère que les 30 derniers jours.
 
-**Classification.** The backend builds the prompt (with phone numbers and IBANs masked), n8n forwards it to Groq and sends back the raw text. The backend validates it with a strict schema:
-- Valid: saved.
-- Invalid: the backend returns a stricter prompt and n8n retries once.
-- Invalid again: category `other`, flag `needs_review` ("To verify" in the UI).
-- Groq unreachable after its retries: the email simply stays pending for the next run, so a quota problem is never mistaken for a bad answer.
+**Classification.** Le backend construit le prompt (numéros de téléphone et IBAN masqués), n8n le transmet à Groq et renvoie le texte brut. Le backend le valide avec un schéma strict :
+- Valide : enregistré.
+- Invalide : le backend renvoie un prompt plus strict et n8n réessaie une fois.
+- Encore invalide : catégorie `other` (autre), indicateur `needs_review` (« To verify » / à vérifier dans l'interface).
+- Groq injoignable après ses nouvelles tentatives : l'e-mail reste simplement en attente pour l'exécution suivante ; un problème de quota n'est donc jamais confondu avec une mauvaise réponse.
 
-**Reply.** The user sees and edits the draft, clicks *Review and send*, then *Send now*. The front end creates one `Idempotency-Key` per confirmation. The backend stores the reply (unique key), then hands it to n8n in a background task. n8n must **claim** the attempt before sending. The UI polls the reply status (sending, sent, or failed with a Retry button).
+**Réponse.** L'utilisateur voit et modifie le brouillon, clique sur *Review and send*, puis *Send now*. Le front crée une `Idempotency-Key` par validation. Le backend enregistre la réponse (clé unique), puis la transmet à n8n en tâche de fond. n8n doit **réserver** la tentative avant d'envoyer. L'interface interroge le statut de la réponse (en cours, envoyé, ou échec avec bouton Réessayer).
 
-## 3. Data model
+## 3. Modèle de données
 
 ```mermaid
 erDiagram
@@ -145,82 +147,84 @@ erDiagram
     }
 ```
 
-- `emails.status`: `to_process`, `draft_ready`, `replied`, `ignored`.
-- `emails.priority`: 1 = urgent, 2 = this week, 3 = low.
-- `replies.status`: `sending`, `sent`, `failed`.
-- The emails sent by the user (Gmail label `SENT`) are stored with `is_outbound = true`. They appear in the thread, not in the inbox list, and they mark the older emails of the thread as `replied`.
+- `emails.status` : `to_process` (à traiter), `draft_ready` (brouillon prêt), `replied` (répondu), `ignored` (ignoré).
+- `emails.category` : `client`, `invoice` (facture), `appointment` (rendez-vous), `newsletter`, `spam` (spam probable), `other` (autre).
+- `emails.priority` : 1 = urgent, 2 = cette semaine, 3 = faible.
+- `replies.status` : `sending` (en cours), `sent` (envoyé), `failed` (échec).
+- Les e-mails envoyés par l'utilisateur (libellé Gmail `SENT`) sont stockés avec `is_outbound = true`. Ils apparaissent dans le fil, pas dans la liste de réception, et ils marquent les e-mails plus anciens du fil comme `replied`.
 
-## 4. Technical choices
+## 4. Choix techniques
 
-| Choice | Why |
+| Choix | Raison |
 |---|---|
-| **PostgreSQL** rather than SQLite | Real concurrency (n8n and the website write at the same time), reliable `UNIQUE` constraints, and the same engine in production. The tests also run on SQLite for speed, and on PostgreSQL to check the real behaviour. |
-| **Idempotence in the database** (`UNIQUE` on `gmail_message_id` and `idempotency_key`) | An application-level check alone fails when two requests arrive at the same time. The constraint is the final guarantee; the code catches the conflict and returns the existing row. |
-| **Atomic state changes** (`UPDATE ... WHERE status = 'failed'`) | Two clicks on Retry cannot start two attempts: only one `UPDATE` matches. |
-| **Claim before send** (`claimed_attempt`) | If the same dispatch reaches n8n twice, only the first execution sends. If the backend times out while n8n did receive the request, the attempt is not marked failed once it is claimed, so the user is not offered a retry that would send twice. |
-| **The backend owns the prompt and the validation** | One source of truth, sensitive data masked before leaving the backend, and the validation is covered by Python unit tests. n8n stays a simple orchestrator. |
-| **Drafts generated by the backend**, not n8n | The user is waiting in the UI: one synchronous call is simpler and faster. The brief lists exactly four workflows, and drafts are not one of them. |
-| **Rule-based top 5, AI-written summary** | The ranking (priority, then "to verify", then age) is predictable and explainable: each item shows its reason. The AI writes only the free-text summary, cached per day. |
-| **Two models** | `openai/gpt-oss-20b` for classification (many calls, simple task, `temperature 0`, JSON mode, short reasoning). `openai/gpt-oss-120b` for drafts (few calls, writing quality matters). Both are configurable in `.env`. |
-| **Session cookie** (httpOnly, SameSite=Lax) + Argon2id | The token is not readable by JavaScript (XSS), and only a SHA-256 of it is stored in the database. Passwords use Argon2id, the current OWASP recommendation. |
-| **Same origin** (nginx serves the site and proxies `/api`) | No CORS configuration, and the cookie works simply. |
-| **FastAPI** | Typed request and response models (Pydantic) and automatic Swagger documentation at `/api/docs`. |
-| **n8n pinned to 1.123.62** | The last maintained 1.x line. 2.x changes defaults (for example environment access in nodes) that these workflows rely on. |
+| **PostgreSQL** plutôt que SQLite | Vraie concurrence (n8n et le site écrivent en même temps), contraintes `UNIQUE` fiables, et le même moteur qu'en production. Les tests tournent aussi sur SQLite pour la rapidité, et sur PostgreSQL pour vérifier le comportement réel. |
+| **Idempotence dans la base** (`UNIQUE` sur `gmail_message_id` et `idempotency_key`) | Une vérification uniquement applicative échoue quand deux requêtes arrivent en même temps. La contrainte est la garantie finale ; le code intercepte le conflit et renvoie la ligne existante. |
+| **Changements d'état atomiques** (`UPDATE ... WHERE status = 'failed'`) | Deux clics sur Réessayer ne peuvent pas lancer deux tentatives : un seul `UPDATE` correspond. |
+| **Réservation avant envoi** (`claimed_attempt`) | Si le même envoi atteint n8n deux fois, seule la première exécution envoie. Si le backend dépasse son délai alors que n8n a bien reçu la requête, la tentative réservée n'est pas marquée en échec : l'utilisateur ne se voit pas proposer un « Réessayer » qui enverrait deux fois. |
+| **Le backend gère le prompt et la validation** | Une seule source de vérité, données sensibles masquées avant de quitter le backend, et validation couverte par des tests unitaires Python. n8n reste un simple orchestrateur. |
+| **Brouillons générés par le backend**, pas par n8n | L'utilisateur attend dans l'interface : un appel synchrone est plus simple et plus rapide. Le sujet liste exactement quatre workflows, et les brouillons n'en font pas partie. |
+| **Top 5 par règles, résumé écrit par l'IA** | Le classement (priorité, puis « à vérifier », puis ancienneté) est prévisible et explicable : chaque élément affiche sa raison. L'IA écrit seulement le résumé en texte libre, mis en cache par jour. |
+| **Deux modèles** | `openai/gpt-oss-20b` pour la classification (beaucoup d'appels, tâche simple, `temperature 0`, mode JSON, raisonnement court). `openai/gpt-oss-120b` pour les brouillons (peu d'appels, la qualité d'écriture compte). Les deux sont configurables dans `.env`. |
+| **Cookie de session** (httpOnly, SameSite=Lax) + Argon2id | Le jeton n'est pas lisible par JavaScript (XSS), et seul son SHA-256 est stocké en base. Les mots de passe utilisent Argon2id, la recommandation actuelle de l'OWASP. |
+| **Même origine** (nginx sert le site et relaie `/api`) | Pas de configuration CORS, et le cookie fonctionne simplement. |
+| **FastAPI** | Modèles de requête et de réponse typés (Pydantic) et documentation Swagger automatique sur `/api/docs`. |
+| **n8n figé en version 1.123.62** | La dernière branche 1.x maintenue. La 2.x change des valeurs par défaut (par exemple l'accès aux variables d'environnement dans les nœuds) dont ces workflows dépendent. |
 
-## 5. Difficulties and solutions
+## 5. Difficultés rencontrées et solutions
 
-| Difficulty | Solution |
+| Difficulté | Solution |
 |---|---|
-| Not losing emails at the edges of the sync window | Cursor = start of the last *successful* run minus 5 minutes of overlap. The overlap creates duplicates on purpose, and idempotent import absorbs them. |
-| Gmail returns messages newest first, but thread status rules need time order | The backend sorts each batch by date before storing it. |
-| The AI does not always return clean JSON | Groq JSON mode + `temperature 0` + a strict schema (`StrictInt` priority, closed category list) + one retry with a stricter prompt + a safe fallback. A Markdown code fence is tolerated; anything else is rejected. |
-| Distinguishing "AI said nonsense" from "AI unreachable" | Quota and network errors go through the HTTP node's error output and leave the email pending; only a real answer counts as an attempt. |
-| Replying in the same Gmail thread | Store the `Message-ID` and `References` headers at sync time, and send with `threadId` + `In-Reply-To` + `References` + a "Re:" subject. |
-| Double send when the network fails in the middle | Idempotency key + atomic retry + claim before send + "sent wins over failed" for the same attempt. No automatic retry on the Gmail send itself. |
-| No credentials in the workflow exports | Workflows only reference credential ids. `n8n/setup_n8n.py` reads `.env` and imports the credentials into n8n, which encrypts them. |
-| Header injection in the outgoing email | Line breaks are removed from every header value before building the MIME message. |
-| Wrong sync counters with real Gmail: a run reported 20 duplicates instead of 30 | n8n posts the batches of one run in parallel, and the backend did `count += n` in Python (read, then write), so one batch overwrote the other ("lost update"). The counters are now incremented atomically in SQL (`count = count + n`), and a test posts 8 batches in parallel on PostgreSQL. No email was ever lost, only the count. |
-| Groq retired the Llama models first chosen (HTTP 404 `model_not_found`) | Switched to `gpt-oss-20b` / `gpt-oss-120b`. The model names live in `.env`, so no code depended on them. |
-| `gpt-oss` models "think" before answering, and that reasoning counts toward `max_tokens`: with 300 tokens, some answers were cut off before the JSON (Groq HTTP 400 `json_validate_failed`, 1 email in 28) | `reasoning_effort: low` for these models and a larger token budget (1000). Valid first try went from 96.4 % to 100 %. Because n8n forwards the request built by the backend unchanged, the fix applies to the workflow too. |
+| Ne perdre aucun e-mail aux bords de la fenêtre de synchronisation | Curseur = début de la dernière exécution *réussie* moins 5 minutes de chevauchement. Le chevauchement crée volontairement des doublons, que l'import idempotent absorbe. |
+| Gmail renvoie les messages du plus récent au plus ancien, mais les règles de statut des fils ont besoin de l'ordre chronologique | Le backend trie chaque lot par date avant de l'enregistrer. |
+| L'IA ne renvoie pas toujours un JSON propre | Mode JSON de Groq + `temperature 0` + schéma strict (priorité `StrictInt`, liste fermée de catégories) + une nouvelle tentative avec un prompt plus strict + un repli sûr. Un bloc de code Markdown est toléré ; tout le reste est rejeté. |
+| Distinguer « l'IA a répondu n'importe quoi » de « l'IA est injoignable » | Les erreurs de quota et de réseau passent par la sortie d'erreur du nœud HTTP et laissent l'e-mail en attente ; seule une vraie réponse compte comme une tentative. |
+| Répondre dans le même fil Gmail | Enregistrer les en-têtes `Message-ID` et `References` lors de la synchronisation, puis envoyer avec `threadId` + `In-Reply-To` + `References` + un objet « Re: ». |
+| Double envoi quand le réseau coupe au milieu | Clé d'idempotence + nouvelle tentative atomique + réservation avant envoi + « envoyé l'emporte sur échec » pour une même tentative. Aucune nouvelle tentative automatique sur l'envoi Gmail lui-même. |
+| Aucun identifiant dans les exports de workflows | Les workflows ne référencent que des identifiants de credentials. `n8n/setup_n8n.py` lit `.env` et importe les credentials dans n8n, qui les chiffre. |
+| Injection d'en-têtes dans l'e-mail sortant | Les retours à la ligne sont supprimés de chaque valeur d'en-tête avant de construire le message MIME. |
+| Compteurs de synchronisation faux avec le vrai Gmail : une exécution indiquait 20 doublons au lieu de 30 | n8n envoie les lots d'une même exécution en parallèle, et le backend faisait `count += n` en Python (lecture, puis écriture) : un lot écrasait le compte de l'autre (« mise à jour perdue »). Les compteurs sont désormais incrémentés de façon atomique en SQL (`count = count + n`), et un test envoie 8 lots en parallèle sur PostgreSQL. Aucun e-mail n'a jamais été perdu, seulement le compte. |
+| Groq a retiré les modèles Llama choisis au départ (HTTP 404 `model_not_found`) | Passage à `gpt-oss-20b` / `gpt-oss-120b`. Les noms des modèles sont dans `.env` : aucun code n'en dépendait. |
+| Les modèles `gpt-oss` « réfléchissent » avant de répondre, et ce raisonnement compte dans `max_tokens` : avec 300 tokens, certaines réponses étaient coupées avant le JSON (HTTP 400 `json_validate_failed` de Groq, 1 e-mail sur 28) | `reasoning_effort: low` pour ces modèles et un budget plus large (1000 tokens). Le taux de réponses valides du premier coup est passé de 96,4 % à 100 %. Comme n8n transmet sans la modifier la requête construite par le backend, la correction s'applique aussi au workflow. |
 
-## 6. Measured results
+## 6. Résultats mesurés
 
-> Measured on 20-21/10/2026 on a local Docker setup (Windows 11, PostgreSQL 16, n8n 1.123.62), with a dedicated test Gmail inbox and Groq.
+> Mesures du 20 et 21/10/2026 sur une installation Docker locale (Windows 11, PostgreSQL 16, n8n 1.123.62), avec une boîte Gmail de test dédiée et Groq.
 
-| Measure | How to measure | Result |
+| Mesure | Méthode | Résultat |
 |---|---|---|
-| Sync duration for 30 emails (Gmail to database) | 30 emails sent to the test inbox, then one run of workflow 1; `duration_seconds` of that run in `GET /api/stats` | **9.7 s** for 30 emails (30 fetched, 30 inserted, 0 duplicates; run #8). The next run re-fetched the same 30 through the 5-minute overlap: 11.4 s, 0 inserted, 30 duplicates |
-| Backend import time for 30 emails (batches of 10, PostgreSQL 16, local) | `python -m scripts.seed` | about 0.07 s (measured locally; the Gmail fetching dominates the total) |
-| Valid AI outputs on the first try (demo dataset, 28 inbound emails) | `python -m scripts.eval_classification` (prints `valid_first_try_rate`) | **100 %** (28/28, on 2 runs, `gpt-oss-20b`, measured 20/10/2026) |
-| Category accuracy vs expected labels (demo dataset) | same command (`category_accuracy`) | **82 to 86 %** (23-24/28). Typical errors: a payment reminder read as `client`, borderline `other` emails read as `spam` or `invoice` |
-| Priority (demo dataset) | same command (`priority_exact`, `priority_within_1`) | 71 % exact, 89 % within one level |
-| AI latency | same command (`mean_latency_s`) | about 0.65 s per email; a draft takes under 1 s (`gpt-oss-120b`) |
-| Valid AI outputs on the first try (real inbox, through n8n) | `GET /api/stats` (`first_try_valid_rate`) | **100 %** (30/30 synced emails, 0 retry, 0 "To verify") |
-| Reply sent from the app (real Gmail) | send from the UI, check the status and the thread | status `sent` about 1 s after "Send now"; the reply appears in the same Gmail thread |
-| Error handling (simulated Gmail outage) | Gmail API made unreachable for n8n only, then restored | The scheduled sync failed after its 3 retries; workflow 4 recorded the error in the backend within 10 s (workflow, node, message, execution id) and the run was marked `failed`. The next run started from the same cursor as the failed one (the last successful run minus the overlap), so nothing was skipped |
-| Automated tests | `pytest` | 63 on PostgreSQL 16; on SQLite 62 pass and 1 is skipped (the parallel-batches test needs real concurrent connections) |
+| Durée de synchronisation de 30 e-mails (de Gmail à la base) | 30 e-mails envoyés à la boîte de test, puis une exécution du workflow 1 ; `duration_seconds` de cette exécution dans `GET /api/stats` | **9,7 s** pour 30 e-mails (30 récupérés, 30 insérés, 0 doublon ; exécution n° 8). L'exécution suivante a récupéré à nouveau les mêmes 30 grâce au chevauchement de 5 minutes : 11,4 s, 0 inséré, 30 doublons |
+| Temps d'import backend pour 30 e-mails (lots de 10, PostgreSQL 16, local) | `python -m scripts.seed` | environ 0,07 s (mesuré en local ; la récupération Gmail domine le total) |
+| Sorties IA valides du premier coup (jeu de démonstration, 28 e-mails reçus) | `python -m scripts.eval_classification` (affiche `valid_first_try_rate`) | **100 %** (28/28, sur 2 exécutions, `gpt-oss-20b`, mesuré le 20/10/2026) |
+| Exactitude des catégories par rapport aux étiquettes attendues (jeu de démonstration) | même commande (`category_accuracy`) | **82 à 86 %** (23-24/28). Erreurs typiques : une relance de paiement lue comme `client`, des e-mails `other` limites lus comme `spam` ou `invoice` |
+| Priorité (jeu de démonstration) | même commande (`priority_exact`, `priority_within_1`) | 71 % exacte, 89 % à un niveau près |
+| Latence de l'IA | même commande (`mean_latency_s`) | environ 0,65 s par e-mail ; un brouillon prend moins d'1 s (`gpt-oss-120b`) |
+| Sorties IA valides du premier coup (vraie boîte, via n8n) | `first_try_valid` des e-mails synchronisés depuis Gmail (`GET /api/stats` donne directement ce taux sur une boîte sans les données de démonstration) | **100 %** (30/30 e-mails synchronisés, 0 nouvelle tentative, 0 « à vérifier ») |
+| Réponse envoyée depuis l'application (vrai Gmail) | envoi depuis l'interface, vérification du statut et du fil | statut `sent` environ 1 s après « Send now » ; la réponse apparaît dans le même fil Gmail |
+| Gestion des erreurs (panne Gmail simulée) | API Gmail rendue injoignable pour n8n seulement, puis rétablie | La synchronisation planifiée a échoué après ses 3 tentatives ; le workflow 4 a enregistré l'erreur auprès du backend en moins de 10 s (workflow, nœud, message, identifiant d'exécution) et l'exécution a été marquée `failed`. L'exécution suivante est repartie du même curseur que celle en échec (dernière exécution réussie moins le chevauchement) : rien n'a été sauté |
+| Tests automatisés | `pytest` | 63 sur PostgreSQL 16 ; sur SQLite, 62 réussis et 1 ignoré (le test des lots en parallèle a besoin de vraies connexions concurrentes) |
 
-Most of the sync time is Gmail fetching: the workflow fetches at most 10 messages per second to respect the Gmail quota, so 30 emails need about 3 s of pure fetching; the rest is listing, the HTTP round trips between n8n and the backend, and n8n's own overhead. The backend import itself takes well under 0.1 s.
+L'essentiel du temps de synchronisation vient de la récupération Gmail : le workflow récupère au plus 10 messages par seconde pour respecter le quota Gmail, donc 30 e-mails demandent environ 3 s de récupération pure ; le reste correspond au listage, aux allers-retours HTTP entre n8n et le backend, et au fonctionnement propre de n8n. L'import par le backend prend nettement moins de 0,1 s.
 
-## 7. Limits and possible improvements
+## 7. Limites et améliorations possibles
 
-- **Ambiguous Gmail failure.** If Gmail accepts the email but n8n crashes before reporting it, the reply stays "sending" (we never auto-fail a claimed attempt). The user must check the Gmail Sent folder. Improvement: before a retry, search Gmail for the `Message-ID` we generated.
-- **Schema migrations.** Tables are created at startup (`create_all`). For a real deployment, use Alembic migrations.
-- **Search.** `ILIKE` on subject and body is enough for thousands of emails. Beyond that, a PostgreSQL full-text index (`tsvector` + GIN).
-- **Single user.** One account, created from `.env`. Multi-user would need an owner on threads and per-user Gmail credentials.
-- **Login rate limiting** is not implemented (add a limit per IP and per account).
-- **Live updates.** The list refreshes every 60 s and the reply status every 1.5 s while sending. Server-Sent Events would remove the polling (bonus not done).
-- **HMAC signature (bonus).** Implemented and tested in the backend (`WEBHOOK_HMAC_SECRET`), but not wired in the n8n workflows: it would need a Code node to sign the exact body.
-- **Auto-reply for one category (bonus).** Not implemented, on purpose: sending without validation is the riskiest feature and was out of the time budget.
-- **Classification trigger.** Workflow 2 runs every 5 minutes; triggering it at the end of each sync would reduce the delay.
-- **Priority of probable spam.** On the real inbox, the AI sometimes gives priority 1 to phishing-like emails (e.g. a "domain expires" notice classified as `spam`, P1): it reads the email's false urgency as real. The top 5 already ranks spam after other emails of the same priority, but a simple rule (`spam` or `newsletter` → priority 3) would make this consistent.
-- **First sync** fetches the last 30 days only.
+- **Échec Gmail ambigu.** Si Gmail accepte l'e-mail mais que n8n plante avant de le signaler, la réponse reste « en cours » (une tentative réservée n'est jamais passée en échec automatiquement). L'utilisateur doit vérifier le dossier Envoyés de Gmail. Amélioration : avant une nouvelle tentative, rechercher dans Gmail le `Message-ID` généré.
+- **Migrations de schéma.** Les tables sont créées au démarrage (`create_all`). Pour un vrai déploiement, utiliser des migrations Alembic.
+- **Recherche.** `ILIKE` sur l'objet et le contenu suffit pour quelques milliers d'e-mails. Au-delà, un index plein texte PostgreSQL (`tsvector` + GIN).
+- **Un seul utilisateur.** Un compte, créé à partir de `.env`. Le multi-utilisateur demanderait un propriétaire sur les fils et des credentials Gmail par utilisateur.
+- **Limitation des tentatives de connexion** non implémentée (ajouter une limite par IP et par compte).
+- **Mises à jour en direct.** La liste se rafraîchit toutes les 60 s et le statut d'envoi toutes les 1,5 s pendant l'envoi. Les Server-Sent Events supprimeraient ces interrogations (bonus non réalisé).
+- **Signature HMAC (bonus).** Implémentée et testée dans le backend (`WEBHOOK_HMAC_SECRET`), mais pas branchée dans les workflows n8n : il faudrait un nœud Code pour signer le corps exact.
+- **Réponse automatique pour une catégorie (bonus).** Non implémentée, volontairement : envoyer sans validation est la fonctionnalité la plus risquée, et elle dépassait le temps disponible.
+- **Déclenchement de la classification.** Le workflow 2 tourne toutes les 5 minutes ; le déclencher à la fin de chaque synchronisation réduirait le délai.
+- **Priorité du spam probable.** Sur la vraie boîte, l'IA donne parfois la priorité 1 à des e-mails de type hameçonnage (par exemple un avis « votre domaine expire » classé `spam`, P1) : elle prend leur fausse urgence au sérieux. Le top 5 classe déjà le spam après les autres e-mails de même priorité, mais une règle simple (`spam` ou `newsletter` → priorité 3) rendrait cela cohérent.
+- **Première synchronisation** limitée aux 30 derniers jours.
+- **Langue de l'interface.** L'interface et les textes produits par l'IA sont en anglais ; le rapport existe en français et en anglais.
 
-### Bonus status
+### État des bonus
 
-| Bonus | Status |
+| Bonus | État |
 |---|---|
-| Real-time updates (SSE / WebSocket) | Not done (polling instead) |
-| HMAC signature of webhook bodies | Backend done and tested, not wired in n8n |
-| Masking phone numbers and IBANs before the AI | Done and tested |
-| Auto-reply for one category | Not done |
+| Mises à jour en temps réel (SSE / WebSocket) | Non réalisé (interrogation périodique à la place) |
+| Signature HMAC du corps des webhooks | Backend réalisé et testé, pas branché dans n8n |
+| Masquage des numéros de téléphone et des IBAN avant l'IA | Réalisé et testé |
+| Réponse automatique pour une catégorie | Non réalisé |

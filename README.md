@@ -6,7 +6,7 @@ A Gmail inbox assistant: a web inbox with AI classification, a "Today" priority 
 Website (React)  ->  Backend API (FastAPI + PostgreSQL)  <->  n8n  <->  Gmail / Groq
 ```
 
-The website only talks to the backend. n8n syncs Gmail, classifies emails with AI and sends replies. The full design is in [RAPPORT.md](RAPPORT.md).
+The website only talks to the backend. n8n syncs Gmail, classifies emails with AI and sends replies. The full design is in the report: [RAPPORT.md](RAPPORT.md) (français) or [REPORT.en.md](REPORT.en.md) (English).
 
 ## Quick start (demo mode, no Gmail needed)
 
@@ -94,5 +94,6 @@ frontend/           React + Vite + Tailwind website (served by nginx in Docker)
 n8n/workflows/      Exports of the 4 workflows (no credentials inside)
 n8n/setup_n8n.py    Loads credentials from .env and imports the workflows
 docker-compose.yml  db + backend + web + n8n
-RAPPORT.md          Report: architecture, choices, results, limits
+RAPPORT.md          Report in French: architecture, choices, results, limits
+REPORT.en.md        The same report in English
 ```
