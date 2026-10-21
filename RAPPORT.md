@@ -127,6 +127,7 @@ erDiagram
 | AI latency | same command (`mean_latency_s`) | about 0.65 s per email; a draft takes under 1 s (`gpt-oss-120b`) |
 | Valid AI outputs on the first try (real inbox, through n8n) | `GET /api/stats` (`first_try_valid_rate`) | **100 %** (30/30 synced emails, 0 retry, 0 "To verify") |
 | Reply sent from the app (real Gmail) | send from the UI, check the status and the thread | status `sent` about 1 s after "Send now"; the reply appears in the same Gmail thread |
+| Error handling (simulated Gmail outage) | Gmail API made unreachable for n8n only, then restored | The scheduled sync failed after its 3 retries; workflow 4 recorded the error in the backend within 10 s (workflow, node, message, execution id) and the run was marked `failed`. The next run started from the same cursor as the failed one (the last successful run minus the overlap), so nothing was skipped |
 | Automated tests | `pytest` | 63 on PostgreSQL 16; on SQLite 62 pass and 1 is skipped (the parallel-batches test needs real concurrent connections) |
 
 Most of the sync time is Gmail fetching: the workflow fetches at most 10 messages per second to respect the Gmail quota, so 30 emails need about 3 s of pure fetching; the rest is listing, the HTTP round trips between n8n and the backend, and n8n's own overhead. The backend import itself takes well under 0.1 s.
