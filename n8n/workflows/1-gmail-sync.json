@@ -1,0 +1,426 @@
+{
+  "id": "InboxSyncWf00001",
+  "name": "1 - Gmail sync (every 10 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Gmail sync\n1. The backend opens a sync run and returns the cursor (last successful sync, minus 5 min overlap).\n2. Gmail is listed with `after:<cursor>`, all pages.\n3. Each message is fetched (10/s max), parsed, and posted in batches of 20.\n4. Duplicates are ignored by the backend (unique Gmail id).\n5. The run is closed as success. If anything crashes, the error workflow marks it failed, so the cursor does not move.",
+        "height": 300,
+        "width": 380
+      },
+      "id": "80b5e4f9-75b4-4ca5-8b36-fd229b6712ad",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "0c73944b-2434-41ea-bfe8-85feaf0a25a0",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/sync/start",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "33e72933-6d33-4b57-8376-a89b387fa61b",
+      "name": "Start sync run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.after_epoch > 0 ? 'after:' + $json.after_epoch : 'newer_than:30d' }} -in:chats"
+            },
+            {
+              "name": "maxResults",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50
+            }
+          }
+        }
+      },
+      "id": "a4cdb13d-f1ed-4628-813f-d095af0caa10",
+      "name": "List new Gmail messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GmailOAuth200001",
+          "name": "Gmail account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten every Gmail page into one item per message id\nconst ids = [];\nfor (const page of $input.all()) {\n  for (const m of (page.json.messages || [])) ids.push(m.id);\n}\nconst unique = [...new Set(ids)];\nconst runId = $('Start sync run').first().json.sync_run_id;\nif (unique.length === 0) return [{ json: { sync_run_id: runId, count: 0 } }];\nreturn unique.map(id => ({ json: { id, sync_run_id: runId, count: unique.length } }));\n"
+      },
+      "id": "28e545fc-1f12-43a1-8811-4a3ad3f4394a",
+      "name": "Collect message ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d637ce3a-9a8c-4d89-8428-704cf5105fb4",
+              "leftValue": "={{ $json.count }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "rightValue": 0
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a90b88e-996b-44bc-a01e-e7bbb9067621",
+      "name": "Any new message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "format",
+              "value": "full"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "5d964ea3-a846-47de-87f2-a7c43a693e12",
+      "name": "Get full message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -100
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GmailOAuth200001",
+          "name": "Gmail account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the fields the backend needs, then group them in batches of 20\nconst header = (h, n) => ((h || []).find(x => x.name.toLowerCase() === n.toLowerCase()) || {}).value || '';\nconst clean = s => (s || '').replace(/[\\r\\n]+/g, ' ').trim();\nconst decode = d => Buffer.from(d.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');\nfunction findPart(p, mime) {\n  if (!p) return null;\n  if (p.mimeType === mime && p.body && p.body.data) return p.body.data;\n  for (const c of (p.parts || [])) { const r = findPart(c, mime); if (r) return r; }\n  return null;\n}\nconst stripHtml = h => h\n  .replace(/<(style|script)[\\s\\S]*?<\\/\\1>/gi, '')\n  .replace(/<br\\s*\\/?>/gi, '\\n').replace(/<\\/(p|div|li|tr)>/gi, '\\n')\n  .replace(/<[^>]+>/g, '')\n  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\")\n  .replace(/\\n{3,}/g, '\\n\\n').trim();\nfunction parseAddress(v) {\n  const m = (v || '').match(/^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/);\n  return m ? { name: m[1].trim(), address: m[2].trim().toLowerCase() }\n           : { name: '', address: (v || '').trim().toLowerCase() };\n}\nconst addressList = v => v ? v.split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/)\n  .map(s => parseAddress(s).address).filter(Boolean) : [];\n\nconst emails = [];\nfor (const item of $input.all()) {\n  const m = item.json;\n  if (!m.id || !m.payload) continue;                  // fetch failed: skipped, retried next sync\n  const labels = m.labelIds || [];\n  if (labels.includes('DRAFT')) continue;\n  const h = m.payload.headers;\n  const from = parseAddress(header(h, 'From'));\n  const plain = findPart(m.payload, 'text/plain');\n  const html = findPart(m.payload, 'text/html');\n  const body = plain ? decode(plain) : html ? stripHtml(decode(html)) : (m.snippet || '');\n  emails.push({\n    gmail_message_id: m.id,\n    gmail_thread_id: m.threadId,\n    rfc822_message_id: clean(header(h, 'Message-ID')) || null,\n    references: clean(header(h, 'References')) || null,\n    from_name: from.name,\n    from_address: from.address || 'unknown@unknown',\n    to_addresses: addressList(header(h, 'To')),\n    cc_addresses: addressList(header(h, 'Cc')),\n    subject: clean(header(h, 'Subject')),\n    body_text: body.slice(0, 100000),\n    received_at: new Date(Number(m.internalDate)).toISOString(),\n    is_outbound: labels.includes('SENT'),\n  });\n}\nconst runId = $('Start sync run').first().json.sync_run_id;\nconst out = [];\nfor (let i = 0; i < emails.length; i += 20) {\n  out.push({ json: { sync_run_id: runId, emails: emails.slice(i, i + 20) } });\n}\nreturn out.length ? out : [{ json: { sync_run_id: runId, emails: [] } }];\n"
+      },
+      "id": "bf7ecc2e-b898-4ea7-a94d-ca414c71d008",
+      "name": "Parse and batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/emails/batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "489da057-c2fc-40d4-8494-c25dcbb053cb",
+      "name": "Send batch to backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/sync/{{ $('Start sync run').first().json.sync_run_id }}/complete",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'success', fetched_count: $('Collect message ids').first().json.count }) }}"
+      },
+      "id": "6eb999a5-d6be-470c-a0b7-1c666723012c",
+      "name": "Complete sync run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/sync/{{ $json.sync_run_id }}/complete",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"success\", fetched_count: 0 }) }}"
+      },
+      "id": "4273ee31-bf89-472f-8631-a10835116d8f",
+      "name": "Complete sync run (nothing new)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Every 10 minutes": {
+      "main": [
+        [
+          {
+            "node": "Start sync run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start sync run": {
+      "main": [
+        [
+          {
+            "node": "List new Gmail messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List new Gmail messages": {
+      "main": [
+        [
+          {
+            "node": "Collect message ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect message ids": {
+      "main": [
+        [
+          {
+            "node": "Any new message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any new message?": {
+      "main": [
+        [
+          {
+            "node": "Get full message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Complete sync run (nothing new)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get full message": {
+      "main": [
+        [
+          {
+            "node": "Parse and batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse and batch": {
+      "main": [
+        [
+          {
+            "node": "Send batch to backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send batch to backend": {
+      "main": [
+        [
+          {
+            "node": "Complete sync run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "errorWorkflow": "InboxErrorWf0004"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

@@ -1,0 +1,434 @@
+{
+  "id": "InboxClassifyWf2",
+  "name": "2 - AI classification",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## AI classification\nThe prompt is built by the backend (single source of truth, sensitive data masked). n8n only forwards it to Groq and returns the raw answer.\n\nThe backend validates the JSON:\n- valid -> saved\n- invalid -> one retry with a stricter prompt\n- invalid twice -> category `other` + `to verify`\n\nRate limits: one email at a time, 3 s pause, retries on 429. If Groq stays down, the email stays pending for the next run.",
+        "height": 300,
+        "width": 380
+      },
+      "id": "b44e6dc8-c0ef-45a9-9af2-4ee30e215e06",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "9f94fbf1-c529-4d66-8135-b733b6141e2b",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/classification/pending?limit=20",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "3afb3b78-5eed-425e-93c9-e3ce9eebe620",
+      "name": "Get emails to classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7295b40a-9aee-4131-a88d-d3ec81a57107",
+              "leftValue": "={{ $json.email_id }}",
+              "operator": {
+                "type": "number",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "06f5f595-182b-4680-b345-696296cef728",
+      "name": "Anything to classify?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "19413921-ce69-43cd-b68b-543f673971fe",
+      "name": "Loop over emails",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.groq_request) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "c52091ad-3055-4c95-9ec4-f7ee33015c82",
+      "name": "Ask AI (attempt 1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GroqApiKey000001",
+          "name": "Groq API key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/emails/{{ $('Loop over emails').item.json.email_id }}/classification",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 1 }) }}"
+      },
+      "id": "290c6887-3ac0-4d92-a912-c03d46abed65",
+      "name": "Validate (attempt 1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9f9dfcf0-0276-4e68-89c3-6ac876e2f0ec",
+              "leftValue": "={{ $json.final }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5a07cce6-6985-4602-bfca-95ab63409de5",
+      "name": "Invalid, retry needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.retry_request) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "9730906c-94f8-4153-abfc-7f4c021a694f",
+      "name": "Ask AI (attempt 2, stricter)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GroqApiKey000001",
+          "name": "Groq API key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/emails/{{ $('Loop over emails').item.json.email_id }}/classification",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ raw_output: $json.choices?.[0]?.message?.content ?? '', attempt: 2 }) }}"
+      },
+      "id": "750c52af-61f5-4eb1-bdb3-b469691f7535",
+      "name": "Validate (attempt 2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "id": "f9c9d629-2e96-478a-8be4-dadf52355a96",
+      "name": "Pause (rate limit)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        200
+      ],
+      "webhookId": "5441a343-b806-406f-bb9b-50adf9f99420"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Get emails to classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get emails to classify": {
+      "main": [
+        [
+          {
+            "node": "Anything to classify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything to classify?": {
+      "main": [
+        [
+          {
+            "node": "Loop over emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop over emails": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Ask AI (attempt 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask AI (attempt 1)": {
+      "main": [
+        [
+          {
+            "node": "Validate (attempt 1)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pause (rate limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate (attempt 1)": {
+      "main": [
+        [
+          {
+            "node": "Invalid, retry needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invalid, retry needed?": {
+      "main": [
+        [
+          {
+            "node": "Ask AI (attempt 2, stricter)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pause (rate limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask AI (attempt 2, stricter)": {
+      "main": [
+        [
+          {
+            "node": "Validate (attempt 2)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pause (rate limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate (attempt 2)": {
+      "main": [
+        [
+          {
+            "node": "Pause (rate limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause (rate limit)": {
+      "main": [
+        [
+          {
+            "node": "Loop over emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "errorWorkflow": "InboxErrorWf0004"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

@@ -1,0 +1,83 @@
+{
+  "id": "InboxErrorWf0004",
+  "name": "4 - Error handler",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Error handler\nSet as the error workflow of workflows 1-3 (already configured in their settings). Any unexpected crash is recorded in the backend (`workflow_errors` table); a crashed sync run is marked failed so the sync cursor does not move.",
+        "height": 300,
+        "width": 380
+      },
+      "id": "24a71d4e-38f5-41c1-aa38-253aae060383",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "fc838e6a-9dc2-4076-b065-e064da240f5e",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/errors",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workflow: $json.workflow?.name ?? 'unknown', node: $json.execution?.lastNodeExecuted ?? $json.trigger?.error?.node?.name ?? null, message: String($json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'Unknown error').slice(0, 4000), execution_id: $json.execution?.id ? String($json.execution.id) : null }) }}"
+      },
+      "id": "30d1c6e3-1db3-4f06-a5bb-0058bb8ead75",
+      "name": "Record error in backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "maxTries": 5,
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Record error in backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

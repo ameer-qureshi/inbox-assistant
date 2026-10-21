@@ -1,0 +1,304 @@
+{
+  "id": "InboxSendWf00003",
+  "name": "3 - Send reply",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Send reply\nCalled only by the backend (shared secret in `X-Webhook-Secret`), never by the website.\n\n1. Claim the attempt: if this exact attempt was already picked up, stop (no double send).\n2. Build the MIME message with In-Reply-To/References and the Gmail threadId, so it lands in the same thread.\n3. Send, then report `sent` (with the Gmail id) or `failed` to the backend. The UI then shows Retry.",
+        "height": 300,
+        "width": 380
+      },
+      "id": "2d5e6ddf-a2cb-43a0-9016-ae5fa5fba34b",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-reply",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "4b02b220-d02a-4793-bdce-8ae0050d6bfc",
+      "name": "Reply requested by backend",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "N8nSendSecret001",
+          "name": "Send-reply webhook secret"
+        }
+      },
+      "webhookId": "1c0e1333-034c-4a20-9521-8235c83782a3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/replies/{{ $('Reply requested by backend').first().json.body.reply_id }}/claim",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ attempt: $('Reply requested by backend').first().json.body.attempt }) }}"
+      },
+      "id": "05822412-276b-4263-95bf-b1f356d08bb0",
+      "name": "Claim this attempt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "57c4d888-21a3-47dc-8406-e5dfe409680d",
+              "leftValue": "={{ $json.claimed }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "88745413-6ca3-4d95-9519-adae240aef79",
+      "name": "Claimed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build an RFC 2822 message that Gmail attaches to the original thread:\n// same threadId + In-Reply-To/References headers + \"Re:\" subject.\nconst p = $('Reply requested by backend').first().json.body;\nconst oneLine = s => String(s || '').replace(/[\\r\\n]+/g, ' ').trim();   // no header injection\nconst encodeWord = s => /^[\\x00-\\x7F]*$/.test(s) ? s : '=?UTF-8?B?' + Buffer.from(s, 'utf8').toString('base64') + '?=';\nconst lines = [\n  `To: ${oneLine(p.to)}`,\n  `Subject: ${encodeWord(oneLine(p.subject))}`,\n  p.in_reply_to ? `In-Reply-To: ${oneLine(p.in_reply_to)}` : null,\n  p.references ? `References: ${oneLine(p.references)}` : null,\n  'MIME-Version: 1.0',\n  'Content-Type: text/plain; charset=\"UTF-8\"',\n  'Content-Transfer-Encoding: base64',\n  '',\n  Buffer.from(String(p.body), 'utf8').toString('base64').replace(/(.{76})/g, '$1\\r\\n'),\n].filter(l => l !== null);\nconst raw = Buffer.from(lines.join('\\r\\n'), 'utf8').toString('base64')\n  .replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');\nreturn [{ json: { raw, threadId: p.gmail_thread_id } }];\n"
+      },
+      "id": "be9ef166-2320-47fd-b07b-1dca9f707c92",
+      "name": "Build email (same thread)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "0d4ddfbe-0bbb-45bd-a06e-d9b899eb2cf2",
+      "name": "Send with Gmail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        -100
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GmailOAuth200001",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/replies/{{ $('Reply requested by backend').first().json.body.reply_id }}/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'sent', attempt: $('Reply requested by backend').first().json.body.attempt, gmail_message_id: $json.id }) }}"
+      },
+      "id": "545d554c-175f-46e6-af5a-9cc962d6398e",
+      "name": "Report sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "maxTries": 5,
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/webhooks/replies/{{ $('Reply requested by backend').first().json.body.reply_id }}/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'failed', attempt: $('Reply requested by backend').first().json.body.attempt, error: String($json.error?.message ?? 'Gmail refused the message').slice(0, 500) }) }}"
+      },
+      "id": "cf26d927-46f1-4a92-8d33-c63b7d15a6a2",
+      "name": "Report failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BackendWebhook01",
+          "name": "Backend webhook secret"
+        }
+      },
+      "maxTries": 5,
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {},
+      "id": "6ed2eea5-a870-43ba-bd76-c51c41e9acaa",
+      "name": "Already handled (do nothing)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        660,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Reply requested by backend": {
+      "main": [
+        [
+          {
+            "node": "Claim this attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim this attempt": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Build email (same thread)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already handled (do nothing)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build email (same thread)": {
+      "main": [
+        [
+          {
+            "node": "Send with Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send with Gmail": {
+      "main": [
+        [
+          {
+            "node": "Report sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "errorWorkflow": "InboxErrorWf0004"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
