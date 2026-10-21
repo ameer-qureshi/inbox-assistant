@@ -18,14 +18,14 @@ Then, to go live: Groq key, Gmail OAuth client, `python n8n/setup_n8n.py`, sign 
 
 ```mermaid
 flowchart LR
-    U[Browser] -->|HTTPS, session cookie| W[nginx: website + /api proxy]
-    W -->|/api/*| B[Backend FastAPI]
+    U[Browser] -->|"HTTPS, session cookie"| W["nginx: website + /api proxy"]
+    W -->|"/api/*"| B[Backend FastAPI]
     B --> DB[(PostgreSQL)]
-    B -->|AI drafts, day summary| G[Groq API]
-    N[n8n] -->|/api/webhooks/* + X-Webhook-Secret| B
-    B -->|send-reply webhook + secret| N
-    N -->|OAuth2| GM[Gmail API]
-    N -->|classification| G
+    B -->|"AI drafts, day summary"| G[Groq API]
+    N[n8n] -->|"/api/webhooks/* + X-Webhook-Secret"| B
+    B -->|"send-reply webhook + secret"| N
+    N -->|"OAuth2"| GM[Gmail API]
+    N -->|"classification"| G
 ```
 
 Rules:
@@ -64,15 +64,85 @@ erDiagram
     emails ||--o{ replies : has
     drafts |o--o{ replies : "used for"
 
-    users { int id PK; string email UK; string password_hash }
-    auth_sessions { int id PK; string token_hash UK; int user_id FK; datetime expires_at }
-    threads { int id PK; string gmail_thread_id UK; string subject; datetime last_message_at }
-    emails { int id PK; string gmail_message_id UK; int thread_id FK; string rfc822_message_id; string from_address; json to_addresses; string subject; text body_text; datetime received_at; bool is_outbound; string status; string category; int priority; text ai_summary; text expected_action; bool needs_review; string classification_state; int classification_attempts; bool first_try_valid }
-    drafts { int id PK; int email_id FK; string tone; text body; string model }
-    replies { int id PK; int email_id FK; int draft_id FK; string idempotency_key UK; text body; string status; int attempts; int claimed_attempt; string gmail_message_id; text error }
-    sync_runs { int id PK; datetime started_at; datetime finished_at; string status; datetime cursor_from; int fetched_count; int inserted_count; int duplicate_count }
-    workflow_errors { int id PK; string workflow; string node; text message; string execution_id }
-    daily_summaries { date day PK; string fingerprint; text text }
+    users {
+        int id PK
+        string email UK
+        string password_hash
+    }
+    auth_sessions {
+        int id PK
+        string token_hash UK
+        int user_id FK
+        datetime expires_at
+    }
+    threads {
+        int id PK
+        string gmail_thread_id UK
+        string subject
+        datetime last_message_at
+    }
+    emails {
+        int id PK
+        string gmail_message_id UK
+        int thread_id FK
+        string rfc822_message_id
+        string from_address
+        json to_addresses
+        string subject
+        text body_text
+        datetime received_at
+        bool is_outbound
+        string status
+        string category
+        int priority
+        text ai_summary
+        text expected_action
+        bool needs_review
+        string classification_state
+        int classification_attempts
+        bool first_try_valid
+    }
+    drafts {
+        int id PK
+        int email_id FK
+        string tone
+        text body
+        string model
+    }
+    replies {
+        int id PK
+        int email_id FK
+        int draft_id FK
+        string idempotency_key UK
+        text body
+        string status
+        int attempts
+        int claimed_attempt
+        string gmail_message_id
+        text error
+    }
+    sync_runs {
+        int id PK
+        datetime started_at
+        datetime finished_at
+        string status
+        datetime cursor_from
+        int fetched_count
+        int inserted_count
+        int duplicate_count
+    }
+    workflow_errors {
+        int id PK
+        string workflow
+        string node
+        text message
+        string execution_id
+    }
+    daily_summaries {
+        date day PK
+        string fingerprint
+        text text
+    }
 ```
 
 - `emails.status`: `to_process`, `draft_ready`, `replied`, `ignored`.
